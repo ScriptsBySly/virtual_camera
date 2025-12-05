@@ -60,7 +60,7 @@ CA_SHIFT = 4
 ### Global Variables
 FRAME_ENDED = False
 video_requests = queue.Queue()
-sm_video_request = queue.Queue()
+sm_video_request = queue.Queue(maxsize=1)
 # ---------------- STATE STRUCTURE ----------------
 class StateStruct:
     def __init__(self, name, video_random, videos=None, transitions=None):
@@ -89,7 +89,8 @@ STATES = {
     "Talking": StateStruct(
         name="Talking",
         video_random=True,
-        transitions=[("Idle", "MIC", (AUDIO_THRESHOLD_SILENCE, SILENCE_DURATION, "NEGATIVE"))]
+        transitions=[("Idle", "MIC", (AUDIO_THRESHOLD_SILENCE, SILENCE_DURATION, "NEGATIVE")),
+                     ("Emotes", "MIDI", (None))]
     ),
     "Emotes": StateStruct(
         name="Emotes",
