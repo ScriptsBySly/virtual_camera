@@ -6,6 +6,10 @@ import sounddevice as sd
 import numpy as np
 #module for creating the window and reading video files
 import cv2
+#module needed for creating queues to store incomig data from sockets
+import queue
+import socket
+import threading
 
 # ---------------- CONFIG ----------------
 ### Screen
@@ -21,6 +25,11 @@ NOISE_DURATION = 0.0
 ######### Options when detecting silence
 AUDIO_THRESHOLD_SILENCE = 0.2
 SILENCE_DURATION = 1.0
+###### MIDI
+HOST = '0.0.0.0'  # Listen on all network interfaces
+PORT = 5000       # Port to listen on
+
+
 
 ### FRAMES
 VIDEO_END_CUTOFF = 20  # Number of frames before the actual end to consider the video finished
@@ -47,11 +56,16 @@ SCANLINE_SPACING = 4
 ######### Chromatic aberration
 ENABLE_CA = True
 CA_SHIFT = 4
+
+### Global Variables
+FRAME_ENDED = False
+video_requests = queue.Queue()
 # ---------------- STATE STRUCTURE ----------------
 class StateStruct:
-    def __init__(self, name, videos=None, transitions=None):
+    def __init__(self, name, video_random, videos=None, transitions=None):
         self.name = name
         self.videos = videos if videos else []
+        self.video_random = video_random
         # transitions: list of tuples (next_state_name, rule_name, config_tuple)
         self.transitions = transitions if transitions else []
 
@@ -59,6 +73,7 @@ class StateStruct:
         return (
             f"StateStruct(name={self.name!r}, "
             f"videos={self.videos!r}, "
+            f"video_random={self.video_random!r}, "
             f"transitions={self.transitions!r})"
         )
 
@@ -66,15 +81,19 @@ class StateStruct:
 STATES = {
     "Idle": StateStruct(
         name="Idle",
-        transitions=[("Talking", "MIC", (AUDIO_THRESHOLD_NOISE, NOISE_DURATION, "POSITIVE"))]
+        video_random=True,
+        transitions=[("Talking", "MIC", (AUDIO_THRESHOLD_NOISE, NOISE_DURATION, "POSITIVE")),
+                     ("Emotes", "MIDI", (None))]
     ),
     "Talking": StateStruct(
         name="Talking",
+        video_random=True,
         transitions=[("Idle", "MIC", (AUDIO_THRESHOLD_SILENCE, SILENCE_DURATION, "NEGATIVE"))]
     ),
     "Emotes": StateStruct(
         name="Emotes",
-        transitions=[("Idle", "Inactivity", )]
+        video_random=False,
+        transitions=[("Idle", "Inactivity", (None))]
     ),
 }
 
@@ -203,6 +222,15 @@ class VideoPlayer:
         self.current_video = None
         self.cap = None
 
+    def select_new_video(self, new_video_requested):
+        
+        self.current_video = new_video_requested
+        print(f"new_video_requested 2: {self.current_video}")
+        if self.cap:
+            self.cap.release()
+        self.cap = cv2.VideoCapture(self.current_video)
+        print(f"Selected video: {self.current_video}")
+
     def select_random_video(self, video_list):
         if video_list:
             self.current_video = random.choice(video_list)
@@ -216,6 +244,7 @@ class VideoPlayer:
             print("No videos available to play.")
 
     def get_frame(self):
+        global FRAME_ENDED
         if not self.cap:
             return None
 
@@ -234,6 +263,10 @@ class VideoPlayer:
             self.select_random_video(self.current_state.videos)
             #Read the first frame of the new video
             ret, frame = self.cap.read()
+            FRAME_ENDED = False
+
+        if near_end:
+            FRAME_ENDED = True
 
         if frame is not None:
             frame = cv2.resize(frame, (self.screen_width, self.screen_height))
@@ -252,7 +285,9 @@ class StateMachine(VideoPlayer, Filters):
         VideoPlayer.__init__(self, screen_width, screen_height)
         Filters.__init__(self, screen_width, screen_height)
         self.states = states
+        self.video_random = False
         self.current_state = states[initial_state_name]
+        self.new_video_requested = "none"
 
         # Pick initial video
         self.select_random_video(self.current_state.videos)
@@ -265,7 +300,10 @@ class StateMachine(VideoPlayer, Filters):
                 #If a rule for transition matches the one in the rules list
                 if r_name == rule_name:
                     #Call the rule callback to see if the transition rule applies
-                    result = callback_fn(*config)
+                    if config is None:
+                       result = callback_fn()
+                    else: 
+                        result = callback_fn(*config)
                     #Check if the transition rule applies
                     if result:
                         #Trigger transition filter
@@ -279,8 +317,14 @@ class StateMachine(VideoPlayer, Filters):
             #Set the current state as the new state
             self.current_state = self.states[new_state_name]
             print(f"Switched to state: {new_state_name}")
-            #Load new video from new current state
-            self.select_random_video(self.current_state.videos)
+            print(f"video_random: {self.current_state.video_random}")
+            if self.current_state.video_random is True:
+                #Load new video from new current state
+                self.select_random_video(self.current_state.videos)
+            else:
+                #Load specific video requested
+                print(f"new_video_requested: {self.new_video_requested}")
+                self.select_new_video(self.new_video_requested)
         #The new state was not found. Go back to idle state as default
         else:
             print(f"State {new_state_name} not found. Switching to Idle state")
@@ -288,6 +332,9 @@ class StateMachine(VideoPlayer, Filters):
             self.current_state = "Idle"
             #Select video from idle state
             self.select_random_video(self.current_state.videos)
+
+    def request_new_video(self, new_video):
+        self.new_video_requested = new_video
 
 
 
@@ -350,9 +397,83 @@ def mic_callback(threshold, duration, threshold_type):
     
     return result
 
+### Inactivity
+###### INIT 
+def inactivity_init():
+    pass
+
+###### CALLBACK
+def inactivity_callback():
+    global FRAME_ENDED
+    result = FRAME_ENDED  
+    return result
+
+### MIDI
+###### Socket callback
+def handle_client(client_socket, address):
+    print(f"New connection from {address}")
+    with client_socket:
+        while True:
+            try:
+                data = client_socket.recv(1024)
+                if not data:
+                    break
+
+                message = data.decode('utf-8').strip()
+                print(f"[{address}] Received raw: {message}")
+
+                # Split by comma
+                parts = message.split(",", 1)   # split only once
+                first_param = parts[0].strip()
+
+                print(f"[{address}] Parsed video request: {first_param}")
+
+                # PUSH only first param to queue
+                video_requests.put(first_param)
+
+            except ConnectionResetError:
+                break
+
+    print(f"Connection closed: {address}")
+
+###### MIDI Server Thread
+def midi_server_thread(server):
+    while True:
+        client_socket, address = server.accept()
+        thread = threading.Thread(target=handle_client, args=(client_socket, address), daemon=True)
+        thread.start()
+
+###### INIT 
+def midi_init():
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind((HOST, PORT))
+    server.listen()
+    print(f"MIDI Server listening on {HOST}:{PORT}")
+
+    # Run server loop in its own thread
+    thread = threading.Thread(target=midi_server_thread, args=(server,), daemon=True)
+    thread.start()
+
+###### CALLBACK
+def midi_callback():
+    result = False
+    try:
+        # Non-blocking pop
+        new_video = video_requests.get_nowait()
+        result = True
+    except queue.Empty:
+        return result  # Nothing to process
+
+    # Do whatever you want with it
+    sm.request_new_video = new_video
+    return result
+
+
 ### List of rules
 RULES = [
     ("MIC", mic_init, mic_callback),
+    ("Inactivity", inactivity_init, inactivity_callback),
+    ("MIDI", midi_init, midi_callback),
 ]
 
 # ---------------- TEST ----------------
