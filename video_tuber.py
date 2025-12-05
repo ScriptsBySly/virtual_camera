@@ -60,6 +60,7 @@ CA_SHIFT = 4
 ### Global Variables
 FRAME_ENDED = False
 video_requests = queue.Queue()
+sm_video_request = queue.Queue()
 # ---------------- STATE STRUCTURE ----------------
 class StateStruct:
     def __init__(self, name, video_random, videos=None, transitions=None):
@@ -222,14 +223,37 @@ class VideoPlayer:
         self.current_video = None
         self.cap = None
 
-    def select_new_video(self, new_video_requested):
-        
-        self.current_video = new_video_requested
-        print(f"new_video_requested 2: {self.current_video}")
+    def select_new_video(self):
+        global sm_video_request
+        # If no requests exist, do nothing
+        if sm_video_request.empty():
+            return
+
+        # Pull the newest request and clear the queue
+        while not sm_video_request.empty():
+            requested_name = sm_video_request.get()
+
+        print(f"[StateMachine] New video requested: {requested_name}")
+
+        # Look for a matching file in the current state
+        matched = None
+        for v in self.current_state.videos:
+            if requested_name.lower() in os.path.basename(v).lower():
+                matched = v
+                break
+
+        if matched is None:
+            print(f"[StateMachine] ERROR: No video found matching '{requested_name}'")
+            return
+
+        # Load matched file
         if self.cap:
             self.cap.release()
-        self.cap = cv2.VideoCapture(self.current_video)
-        print(f"Selected video: {self.current_video}")
+
+        self.current_video = matched
+        self.cap = cv2.VideoCapture(matched)
+        print(f"[StateMachine] Loaded video: {matched}")
+
 
     def select_random_video(self, video_list):
         if video_list:
@@ -256,7 +280,7 @@ class VideoPlayer:
 
         ret, frame = self.cap.read()
 
-        if not ret or near_end:
+        if not ret or near_end and self.current_state.video_random:
             #Trigger transition filter
             self.start_transition_filter()
             #Select another random video
@@ -312,6 +336,7 @@ class StateMachine(VideoPlayer, Filters):
                         self.switch_state(next_state_name)
 
     def switch_state(self, new_state_name):
+        global FRAME_ENDED
         #Validate that the new state is valid
         if new_state_name in self.states:
             #Set the current state as the new state
@@ -323,8 +348,7 @@ class StateMachine(VideoPlayer, Filters):
                 self.select_random_video(self.current_state.videos)
             else:
                 #Load specific video requested
-                print(f"new_video_requested: {self.new_video_requested}")
-                self.select_new_video(self.new_video_requested)
+                self.select_new_video()
         #The new state was not found. Go back to idle state as default
         else:
             print(f"State {new_state_name} not found. Switching to Idle state")
@@ -332,6 +356,8 @@ class StateMachine(VideoPlayer, Filters):
             self.current_state = "Idle"
             #Select video from idle state
             self.select_random_video(self.current_state.videos)
+        #we switched to a new state and selected a new video. Reset flag
+        FRAME_ENDED = False
 
     def request_new_video(self, new_video):
         self.new_video_requested = new_video
@@ -456,16 +482,17 @@ def midi_init():
 
 ###### CALLBACK
 def midi_callback():
+    global sm_video_request
     result = False
     try:
         # Non-blocking pop
         new_video = video_requests.get_nowait()
+        sm_video_request.put(new_video)
         result = True
+
     except queue.Empty:
         return result  # Nothing to process
 
-    # Do whatever you want with it
-    sm.request_new_video = new_video
     return result
 
 
