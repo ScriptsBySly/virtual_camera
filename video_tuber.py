@@ -82,21 +82,25 @@ STATES = {
 
 def auto_load_videos_into_states(state_map):
     """
-    Scans the current directory for files beginning with the state names.
-    Example: 'Idle_1.mp4', 'Talking_hi.mov'
+    Scans the subfolder with the same name as the state for video files.
+    Example: folder 'Idle' contains 'Idle_1.mp4', 'Idle_hi.mov', etc.
     """
-    cwd = os.getcwd()
-    files = os.listdir(cwd)
+    video_ext = (".mp4", ".mov", ".avi", ".mkv")
 
     for state_name, state_struct in state_map.items():
-        prefix = state_name  # direct use
+        folder_path = os.path.join(os.getcwd(), state_name)
         matched_files = []
 
-        for file in files:
-            if file.startswith(prefix) and file.lower().endswith((".mp4", ".mov", ".avi", ".mkv")):
-                matched_files.append(file)
+        if os.path.isdir(folder_path):
+            for file in os.listdir(folder_path):
+                if file.lower().endswith(video_ext):
+                    matched_files.append(os.path.join(folder_path, file))
+        else:
+            print(f"Warning: folder '{folder_path}' does not exist.")
+            exit
 
         state_struct.videos = matched_files
+
 
 # ---------------- Filters ---------------------
 class Filters:
