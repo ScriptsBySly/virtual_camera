@@ -2,8 +2,10 @@
 !Emotes/EMPTY
 !Idle/EMPTY
 !Talking/EMPTY
+!midi_configs/EMPTY
 
 #ignore all the videos inside the media folders
 Emotes/*
 Idle/*
 Talking/*
+midi_configs/*

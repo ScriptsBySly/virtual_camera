@@ -105,7 +105,6 @@ def open_midi_device(device_name_csv):
         return None, None
 
 
-
 def turn_on_leds(outport, buttons):
     """Turn on green LEDs for all configured buttons (velocity=127)."""
     for note in buttons:
@@ -114,6 +113,13 @@ def turn_on_leds(outport, buttons):
         time.sleep(0.01)
     print(f"Turned on LEDs for {len(buttons)} configured buttons.")
 
+def turn_off_all_leds(outport):
+    """Turn off all LEDs on the MIDI device (velocity=0)."""
+    for note in range(128):  # MIDI notes range from 0 to 127
+        msg = mido.Message('note_on', note=note, velocity=0)
+        outport.send(msg)
+        time.sleep(0.005)  # small delay to ensure MIDI device receives messages
+    print("All LEDs turned off.")
 
 # ---------------- MAIN ----------------
 def main():
@@ -135,18 +141,45 @@ def main():
 
     # Open MIDI device using Option 2 logic
     inport, outport = open_midi_device(device_name_csv)
-    if not outport:
+    if not inport:
         return
 
-    # Turn on LEDs for configured buttons
-    turn_on_leds(outport, buttons)
+    # Reset board first
+    turn_off_all_leds(outport)
 
-    print("Client is now connected and LEDs turned on. Idle...")
+    # Turn on LEDs for configured buttons
+    turn_on_leds(outport, buttons) 
+
+    print("Listening for button presses... Press Ctrl+C to exit.")
+
+    pressed_notes = set()  # simple debounce for current session
 
     try:
         while True:
-            # For now, do nothing
-            time.sleep(0.1)
+            for msg in inport.iter_pending():
+                if msg.type == 'note_on' and msg.velocity > 0:
+                    note = msg.note
+                    if note in buttons and note not in pressed_notes:
+                        tag = buttons[note]['tag']
+                        btn_type = buttons[note]['type']
+
+                        # Print info locally
+                        print(f"Button pressed: Tag='{tag}', Type='{btn_type}'")
+
+                        # Send to server
+                        message = f"{tag},{btn_type}"
+                        client.sendall(message.encode('utf-8'))
+
+                        # Mark as pressed for this session
+                        pressed_notes.add(note)
+                elif msg.type == 'note_off' or (msg.type == 'note_on' and msg.velocity == 0):
+                    # Remove from pressed_notes so next press can be detected
+                    note = msg.note
+                    if note in pressed_notes:
+                        pressed_notes.remove(note)
+
+            time.sleep(0.01)
+
     except KeyboardInterrupt:
         print("Exiting...")
         client.close()
