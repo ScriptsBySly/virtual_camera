@@ -1,0 +1,9 @@
+#add the empty files to include the directories in the repo
+!Emotes/EMPTY
+!Idle/EMPTY
+!Talking/EMPTY
+
+#ignore all the videos inside the media folders
+Emotes/*
+Idle/*
+Talking/*
