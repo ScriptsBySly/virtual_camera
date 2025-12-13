@@ -60,7 +60,7 @@ CA_SHIFT = 4
 ### Global Variables
 FRAME_ENDED = False
 video_requests = queue.Queue()
-sm_video_request = queue.Queue(maxsize=1)
+sm_video_request = queue.Queue()
 # ---------------- STATE STRUCTURE ----------------
 class StateStruct:
     def __init__(self, name, video_random, videos=None, transitions=None):
@@ -239,7 +239,7 @@ class VideoPlayer:
         # Look for a matching file in the current state
         matched = None
         for v in self.current_state.videos:
-            if requested_name.lower() in os.path.basename(v).lower():
+            if (requested_name.lower()+".mp4") == os.path.basename(v).lower():
                 matched = v
                 break
 
