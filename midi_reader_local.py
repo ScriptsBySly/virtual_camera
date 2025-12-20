@@ -7,7 +7,7 @@ import sounddevice as sd
 import numpy as np
 
 # ---------------- CONFIG ----------------
-SERVER_HOST = '192.168.0.81'
+SERVER_HOST = '127.0.0.1'
 SERVER_PORT = 5000
 
 MIDI_CONFIG_FOLDER = "midi_configs"

@@ -61,6 +61,7 @@ CA_SHIFT = 4
 FRAME_ENDED = False
 video_requests = queue.Queue()
 sm_video_request = queue.Queue(maxsize=1)
+network_requests = queue.Queue()
 # ---------------- STATE STRUCTURE ----------------
 class StateStruct:
     def __init__(self, name, video_random, videos=None, transitions=None):
@@ -381,13 +382,16 @@ def InputStream_callback(indata, frames, time_info, status):
 ###### INIT 
 def mic_init():
     #Start the Input Stream volume detection
-    sd.InputStream(device=MIC_DEVICE_INDEX, channels=1, callback=InputStream_callback).start()
+    #sd.InputStream(device=MIC_DEVICE_INDEX, channels=1, callback=InputStream_callback).start()
+    #USE NETWORK DATA
+    pass
 
 ###### CALLBACK
 def mic_callback(threshold, duration, threshold_type):
     global SOUND_DETECTED, LAST_NOISE_TIME, VOLUME
     result = False
     threshold_passed = False
+    print(f"VOLUME = {VOLUME}")
 
     #Check the type of threshold that we need to use
     if (threshold_type == "POSITIVE"):
@@ -456,7 +460,7 @@ def handle_client(client_socket, address):
                 print(f"[{address}] Parsed video request: {first_param}")
 
                 # PUSH only first param to queue
-                video_requests.put(first_param)
+                network_requests.put(message)
 
             except ConnectionResetError:
                 break
@@ -497,11 +501,75 @@ def midi_callback():
     return result
 
 
+### Network
+###### Socket callback
+def network_handle_client(client_socket, address):
+    print(f"New connection from {address}")
+    with client_socket:
+        while True:
+            client_socket, address = server.accept()
+            try:
+                data = client_socket.recv(1024)
+                if not data:
+                    break
+
+                message = data.decode('utf-8').strip()
+                print(f"[{address}] Received raw: {message}")
+
+                # PUSH only first param to queue
+                network_requests.put(message)
+
+            except ConnectionResetError:
+                break
+
+    print(f"Connection closed: {address}")
+
+
+###### INIT 
+def network_init():
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind((HOST, PORT))
+    server.listen()
+    print(f"MIDI Server listening on {HOST}:{PORT}")
+
+    # Run server loop in its own thread
+    thread = threading.Thread(target=network_handle_client, args=(client_socket, address), daemon=True)
+    thread.start()
+
+###### CALLBACK
+def network_callback():
+    global network_requests
+    global VOLUME
+    result = False
+    try:
+        # Non-blocking pop
+        message = network_requests.get_nowait()
+
+        # Split by comma
+        parts = message.split(",", 1)   # split only once
+        command_type = parts[0].strip()
+        command = parts[1].strip()
+
+        if (str(command_type) == 'MIC'):
+            VOLUME = float(command)
+            result = True
+        elif(str(command_type) == "MIDI"):
+            # PUSH only first param to queue
+            video_requests.put(str(command))
+            result = True
+        else:
+            print(f"Received unknown command type {command_type}")
+    except queue.Empty:
+         return result  # Nothing to process
+
+    return result
+
 ### List of rules
 RULES = [
     ("MIC", mic_init, mic_callback),
     ("Inactivity", inactivity_init, inactivity_callback),
     ("MIDI", midi_init, midi_callback),
+    #("Network", network_init, network_callback),
 ]
 
 # ---------------- TEST ----------------
@@ -523,6 +591,7 @@ if __name__ == "__main__":
 
     # Main loop
     while True:
+        network_callback()
         # Update the state machine
         sm.update()
         # Get new frame
